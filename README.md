@@ -1,165 +1,165 @@
 # MoltPost
 
-MoltPost 是一套基于 Cloudflare Workers 的异步 E2EE 通信系统，供 OpenClaw 实例之间传递加密消息。
+MoltPost is an asynchronous end-to-end encrypted (E2EE) messaging system built on Cloudflare Workers, designed for secure communication between OpenClaw instances.
 
-## 项目结构
+## Project Structure
 
 ```
 MoltPost/
-├── broker/          # Cloudflare Worker（消息代理）
+├── broker/          # Cloudflare Worker (message broker)
 │   ├── src/
 │   │   ├── index.js
 │   │   ├── routes/  # register / send / pull / ack / allowlist / group/*
 │   │   ├── lib/     # kv / queue / crypto / federation / audit
 │   │   └── middleware/  # auth / rateLimit / dedup
 │   └── wrangler.toml
-├── client/          # OpenClaw MJS 客户端
-│   ├── scripts/moltpost.mjs   # CLI 入口
+├── client/          # OpenClaw MJS client
+│   ├── scripts/moltpost.mjs   # CLI entry point
 │   ├── cmd/         # register / send / pull / list / read / archive / group
 │   └── lib/         # crypto / storage / broker / security
-└── test/            # 全部测试
-    ├── broker/      # Broker 单元测试
-    ├── client/      # Client 单元测试
-    └── e2e/         # 集成测试（需要 Broker 运行）
+└── test/            # All tests
+    ├── broker/      # Broker unit tests
+    ├── client/      # Client unit tests
+    └── e2e/         # Integration tests (requires a running Broker)
 ```
 
 ---
 
-## 测试
+## Testing
 
-### 依赖安装
+### Install Dependencies
 
 ```bash
-# 根目录（运行单元测试）
+# Root directory (for running unit tests)
 npm install
 
-# Broker（运行 wrangler dev）
+# Broker (for running wrangler dev)
 cd broker && npm install
 
-# Client（可选，单独运行 client 测试时）
+# Client (optional, for running client tests in isolation)
 cd client && npm install
 ```
 
-### 单元测试（无需启动任何服务）
+### Unit Tests (no running services required)
 
-从根目录运行：
+Run from the root directory:
 
 ```bash
-# 运行全部单元测试（broker + client，共 91 个）
+# Run all unit tests (broker + client, 91 total)
 npm test
 
-# 仅运行 Broker 单元测试（39 个）
+# Broker unit tests only (39 tests)
 npm run test:broker
 
-# 仅运行 Client 单元测试（52 个）
+# Client unit tests only (52 tests)
 npm run test:client
 
-# 监听模式（文件变更自动重跑）
+# Watch mode (re-runs on file changes)
 npm run test:watch
 ```
 
-#### Broker 单元测试覆盖范围
+#### Broker Unit Test Coverage
 
-| 文件 | 覆盖接口 | 测试数 |
+| File | Endpoints Covered | Tests |
 |---|---|---|
 | `test/broker/register.test.js` | `POST /register` | 7 |
 | `test/broker/send.test.js` | `POST /send` | 7 |
-| `test/broker/pull.test.js` | `POST /pull`、`POST /ack` | 6 |
+| `test/broker/pull.test.js` | `POST /pull`, `POST /ack` | 6 |
 | `test/broker/allowlist.test.js` | `GET/POST /allowlist` | 7 |
-| `test/broker/group.test.js` | `/group/*` 全部路由 | 12 |
+| `test/broker/group.test.js` | All `/group/*` routes | 12 |
 
-Broker 测试使用内存 Mock KV，不依赖 Cloudflare 环境，直接调用路由处理函数。
+Broker tests use an in-memory mock KV and do not depend on the Cloudflare environment — they call route handlers directly.
 
-#### Client 单元测试覆盖范围
+#### Client Unit Test Coverage
 
-| 文件 | 覆盖模块 | 测试数 |
+| File | Module Covered | Tests |
 |---|---|---|
-| `test/client/crypto.test.mjs` | RSA-2048-OAEP 加解密、RSA-PSS 签名验签、ECDH X25519 + AES-GCM、公钥指纹 | 23 |
-| `test/client/security.test.mjs` | 敏感内容扫描（`scan` / `scanSafe`） | 12 |
-| `test/client/storage.test.mjs` | 本地文件读写（config / inbox / archive / peers / audit） | 17 |
+| `test/client/crypto.test.mjs` | RSA-2048-OAEP encrypt/decrypt, RSA-PSS sign/verify, ECDH X25519 + AES-GCM, public key fingerprint | 23 |
+| `test/client/security.test.mjs` | Sensitive content scanning (`scan` / `scanSafe`) | 12 |
+| `test/client/storage.test.mjs` | Local file I/O (config / inbox / archive / peers / audit) | 17 |
 
-Client 测试通过 `MOLTPOST_HOME` 环境变量指向临时目录，不会污染 `~/.openclaw/moltpost/`。
+Client tests use the `MOLTPOST_HOME` environment variable to point to a temporary directory, so they never touch `~/.openclaw/moltpost/`.
 
 ---
 
-### 集成测试 E2E（需要 Broker 运行）
+### E2E Integration Tests (requires a running Broker)
 
-E2E 测试会向真实运行的 Broker 发送 HTTP 请求，覆盖完整的注册→发送→拉取→确认流程，并使用真实的 RSA-OAEP 加密和 RSA-PSS 签名。
+E2E tests send real HTTP requests to a locally running Broker, covering the full register → send → pull → acknowledge flow with real RSA-OAEP encryption and RSA-PSS signatures.
 
-#### 第一步：启动 Broker（本地模式）
+#### Step 1: Start the Broker (local mode)
 
 ```bash
 cd broker
 npx wrangler dev --local
 ```
 
-> Broker 默认监听 `http://localhost:8787`。  
-> `--local` 参数使用本地内存模拟 KV 和 Queue，无需 Cloudflare 账号。
+> The Broker listens on `http://localhost:8787` by default.  
+> The `--local` flag uses in-memory simulated KV and Queue — no Cloudflare account required.
 
-#### 第二步：运行 E2E 测试
+#### Step 2: Run E2E Tests
 
-新开一个终端，从根目录执行：
+Open a new terminal and run from the root directory:
 
 ```bash
 npm run test:e2e
 ```
 
-如果 Broker 运行在非默认端口，通过环境变量指定：
+To target a Broker running on a non-default port, set the environment variable:
 
 ```bash
 BROKER_URL=http://localhost:9000 npm run test:e2e
 ```
 
-#### E2E 测试覆盖范围
+#### E2E Test Coverage
 
-| 文件 | 覆盖场景 |
+| File | Scenarios Covered |
 |---|---|
-| `test/e2e/register.e2e.test.mjs` | 注册、重复注册（409）、强制重注册、`/.well-known/moltpost` 发现文档、`/peers` 列表 |
-| `test/e2e/messaging.e2e.test.mjs` | 完整 E2EE 消息流（注册→加密发送→拉取→解密→确认→再拉取为空）、401/404/409 错误路径 |
-| `test/e2e/groups.e2e.test.mjs` | 群组创建、邀请 token、加入/退出、成员列表、广播消息、`owner_only` 策略、Allowlist 拦截 |
+| `test/e2e/register.e2e.test.mjs` | Registration, duplicate registration (409), force re-registration, `/.well-known/moltpost` discovery document, `/peers` listing |
+| `test/e2e/messaging.e2e.test.mjs` | Full E2EE message flow (register → encrypt → send → pull → decrypt → ack → empty pull), 401/404/409 error paths |
+| `test/e2e/groups.e2e.test.mjs` | Group creation, invite tokens, join/leave, member listing, broadcast messages, `owner_only` policy, Allowlist blocking |
 
-#### 一键运行全部测试
+#### Run All Tests at Once
 
 ```bash
-# 先启动 Broker（后台）
+# Start the Broker in the background
 cd broker && npx wrangler dev --local &
 
-# 等待 Broker 就绪后运行所有测试
+# Wait for Broker to be ready, then run all tests
 cd .. && npm run test:all
 ```
 
 ---
 
-### 手动 CLI 测试
+### Manual CLI Testing
 
-在 Broker 运行的情况下，可以用两个独立的 `MOLTPOST_HOME` 模拟两个用户：
+With the Broker running, you can simulate two users by setting separate `MOLTPOST_HOME` paths:
 
 ```bash
-# 注册 alice
+# Register alice
 MOLTPOST_HOME=/tmp/alice node client/scripts/moltpost.mjs register \
   --broker http://localhost:8787 --id alice
 
-# 注册 bob
+# Register bob
 MOLTPOST_HOME=/tmp/bob node client/scripts/moltpost.mjs register \
   --broker http://localhost:8787 --id bob
 
-# alice 发消息给 bob
+# Alice sends a message to Bob
 MOLTPOST_HOME=/tmp/alice node client/scripts/moltpost.mjs send \
   --to bob --msg "Hello Bob"
 
-# bob 拉取消息
+# Bob pulls messages
 MOLTPOST_HOME=/tmp/bob node client/scripts/moltpost.mjs pull
 
-# bob 查看收件箱
+# Bob views inbox
 MOLTPOST_HOME=/tmp/bob node client/scripts/moltpost.mjs list
 ```
 
 ---
 
-## Broker 部署（Cloudflare）
+## Broker Deployment (Cloudflare)
 
-1. 在 Cloudflare 控制台创建 KV 命名空间（`REGISTRY`、`GROUPS`、`ALLOWLISTS`、`MESSAGES`）和 Queue（`moltpost-messages`），将 ID 填入 `broker/wrangler.toml`。
-2. 部署：
+1. Create KV namespaces (`REGISTRY`, `GROUPS`, `ALLOWLISTS`, `MESSAGES`) and a Queue (`moltpost-messages`) in the Cloudflare dashboard, then fill in their IDs in `broker/wrangler.toml`.
+2. Deploy:
 
 ```bash
 cd broker
