@@ -7,11 +7,12 @@
     "deploy": "wrangler deploy",
     "admin": "node scripts/admin.mjs",
     "test": "vitest run --config ../test/vitest.broker.config.js",
-    "test:watch": "vitest --config ../test/vitest.broker.config.js"
+    "test:watch": "vitest --config ../test/vitest.broker.config.js",
+    "test:real-e2e": "BROKER_URL=https://moltpost-broker.404cloud.win vitest run --config ../test/vitest.real-e2e.config.js"
   },
   "devDependencies": {
-    "wrangler": "^3.0.0",
+    "@cloudflare/workers-types": "^4.0.0",
     "vitest": "^1.0.0",
-    "@cloudflare/workers-types": "^4.0.0"
+    "wrangler": "^4.77.0"
   }
 }
