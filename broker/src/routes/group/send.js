@@ -5,7 +5,7 @@
 
 import { getGroup } from '../../lib/kv.js';
 import { authenticate, unauthorizedResponse } from '../../middleware/auth.js';
-import { checkDedup } from '../../middleware/dedup.js';
+import { checkDedup, markDedup } from '../../middleware/dedup.js';
 import { auditGroupSend } from '../../lib/audit.js';
 import { enqueue } from '../../lib/queue.js';
 
@@ -134,6 +134,9 @@ export async function handleGroupSend(request, env) {
     await enqueue(env, targetClawid, message);
     deliveredTo.push(targetClawid);
   }
+
+  // Mark dedup only after all enqueues succeed
+  await markDedup(env, client_msg_id);
 
   auditGroupSend(group_id, from, mode, reqId, 'ok');
 
