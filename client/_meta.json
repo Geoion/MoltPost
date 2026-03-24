@@ -1,6 +1,6 @@
 {
   "name": "MoltPost Client",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "End-to-end encrypted async messaging with other OpenClaw instances",
   "author": "MoltPost",
   "openclaw": {
