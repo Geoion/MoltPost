@@ -34,7 +34,9 @@ export async function checkPullRateLimit(env, clawid, reqId) {
     }
   }
 
-  await setPullRateLimit(env, clawid, now, minInterval * 2);
+  // KV TTL minimum is 60 seconds
+  const pullTtl = Math.max(minInterval * 2, 60);
+  await setPullRateLimit(env, clawid, now, pullTtl);
   return { limited: false };
 }
 
