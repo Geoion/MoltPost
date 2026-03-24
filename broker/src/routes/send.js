@@ -7,7 +7,7 @@
 import { getRegistry, getAllowlist } from '../lib/kv.js';
 import { authenticate, unauthorizedResponse } from '../middleware/auth.js';
 import { checkSendRateLimit } from '../middleware/rateLimit.js';
-import { checkDedup } from '../middleware/dedup.js';
+import { checkDedup, markDedup } from '../middleware/dedup.js';
 import { auditSend } from '../lib/audit.js';
 import { verifySignature } from '../lib/crypto.js';
 import { enqueue } from '../lib/queue.js';
@@ -147,6 +147,9 @@ export async function handleSend(request, env) {
 
   // Phase 4: enqueue (KV body + index + Queue)
   await enqueue(env, to, message);
+
+  // Mark dedup only after successful enqueue to avoid blocking retries on failed sends
+  await markDedup(env, client_msg_id);
 
   // Update sender last_seen
   const fromRecord = await getRegistry(env, from);
