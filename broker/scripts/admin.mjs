@@ -15,8 +15,10 @@
  */
 
 import { execSync } from 'child_process';
+import { readFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { homedir } from 'os';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BROKER_DIR = path.resolve(__dirname, '..');
@@ -29,42 +31,84 @@ const KV = {
   MESSAGES:  'a137cdaaf5f142fcbc9148794f631dba',
 };
 
-function wrangler(args) {
+const ACCOUNT_ID = 'b9e5dfb41a164d00dc9bd4cffc728742';
+
+// Read OAuth token from wrangler config
+function getWranglerToken() {
+  // Prefer CLOUDFLARE_API_TOKEN env var
+  if (process.env.CLOUDFLARE_API_TOKEN) return process.env.CLOUDFLARE_API_TOKEN;
+
+  const configPath = path.join(homedir(), 'Library', 'Preferences', '.wrangler', 'config', 'default.toml');
   try {
-    const out = execSync(`npx wrangler ${args}`, {
-      cwd: BROKER_DIR,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    return out.toString().trim();
-  } catch (e) {
-    const stderr = e.stderr?.toString() || '';
-    const stdout = e.stdout?.toString() || '';
-    throw new Error(stderr || stdout || e.message);
-  }
+    const content = readFileSync(configPath, 'utf8');
+    const match = content.match(/oauth_token\s*=\s*"([^"]+)"/);
+    if (match) return match[1];
+  } catch { /* ignore */ }
+
+  // Fallback: try Linux path
+  const linuxPath = path.join(homedir(), '.config', 'wrangler', 'config', 'default.toml');
+  try {
+    const content = readFileSync(linuxPath, 'utf8');
+    const match = content.match(/oauth_token\s*=\s*"([^"]+)"/);
+    if (match) return match[1];
+  } catch { /* ignore */ }
+
+  throw new Error('No Cloudflare API token found. Run `wrangler login` or set CLOUDFLARE_API_TOKEN.');
 }
 
-function kvList(namespaceId, prefix = '') {
-  const prefixArg = prefix ? `--prefix "${prefix}"` : '';
-  const raw = wrangler(`kv key list --namespace-id ${namespaceId} ${prefixArg}`);
+const CF_TOKEN = getWranglerToken();
+const CF_BASE = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/storage/kv/namespaces`;
+
+async function kvList(namespaceId, prefix = '') {
+  const url = new URL(`${CF_BASE}/${namespaceId}/keys`);
+  if (prefix) url.searchParams.set('prefix', prefix);
+  url.searchParams.set('limit', '1000');
+
+  const res = await fetch(url.toString(), {
+    headers: { Authorization: `Bearer ${CF_TOKEN}` },
+  });
+  if (!res.ok) throw new Error(`KV list failed: ${res.status} ${await res.text()}`);
+  const json = await res.json();
+  return (json.result || []).map(k => k.name);
+}
+
+async function kvGet(namespaceId, key) {
+  const url = `${CF_BASE}/${namespaceId}/values/${encodeURIComponent(key)}`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${CF_TOKEN}` },
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`KV get failed: ${res.status} ${await res.text()}`);
+  const text = await res.text();
   try {
-    return JSON.parse(raw).map(k => k.name);
+    return JSON.parse(text);
   } catch {
-    return [];
+    return text;
   }
 }
 
-function kvGet(namespaceId, key) {
-  try {
-    const raw = wrangler(`kv key get --namespace-id ${namespaceId} "${key}"`);
-    try {
-      return JSON.parse(raw);
-    } catch {
-      return raw;
-    }
-  } catch (e) {
-    // 404 = key not found, treat as null
-    if (e.message.includes('404')) return null;
-    throw e;
+async function kvDelete(namespaceId, key) {
+  const url = `${CF_BASE}/${namespaceId}/values/${encodeURIComponent(key)}`;
+  const res = await fetch(url, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${CF_TOKEN}` },
+  });
+  if (!res.ok && res.status !== 404) throw new Error(`KV delete failed: ${res.status} ${await res.text()}`);
+}
+
+// Bulk delete up to 10000 keys at once (CF API limit per request)
+async function kvBulkDelete(namespaceId, keys) {
+  if (keys.length === 0) return;
+  const CHUNK = 10000;
+  for (let i = 0; i < keys.length; i += CHUNK) {
+    const chunk = keys.slice(i, i + CHUNK);
+    const url = `${CF_BASE}/${namespaceId}/bulk/delete`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${CF_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(chunk),
+    });
+    if (!res.ok) throw new Error(`KV bulk delete failed: ${res.status} ${await res.text()}`);
   }
 }
 
@@ -86,19 +130,19 @@ function ago(ts) {
 
 async function cmdUsers() {
   console.log('\n📋 Registered Users\n');
-  const keys = kvList(KV.REGISTRY, 'registry:');
+  const keys = await kvList(KV.REGISTRY, 'registry:');
   if (keys.length === 0) { console.log('  (none)'); return; }
 
   const rows = [];
   for (const key of keys) {
     const clawid = key.replace('registry:', '');
-    const rec = kvGet(KV.REGISTRY, key);
+    const rec = await kvGet(KV.REGISTRY, key);
     rows.push({
       clawid,
-      pubkey_version: rec.pubkey_version || 1,
-      last_seen: rec.last_seen,
-      created_at: rec.created_at,
-      group: rec.group_name || '—',
+      pubkey_version: rec?.pubkey_version || 1,
+      last_seen: rec?.last_seen,
+      created_at: rec?.created_at,
+      group: rec?.group_name || '—',
     });
   }
 
@@ -120,7 +164,7 @@ async function cmdUser(clawid) {
   if (!clawid) { console.error('Usage: admin.mjs user <clawid>'); process.exit(1); }
   console.log(`\n👤 User: ${clawid}\n`);
 
-  const rec = kvGet(KV.REGISTRY, `registry:${clawid}`);
+  const rec = await kvGet(KV.REGISTRY, `registry:${clawid}`);
   if (!rec || typeof rec !== 'object') { console.log('  Not found.'); return; }
 
   console.log(`  ClawID:         ${rec.clawid}`);
@@ -131,12 +175,12 @@ async function cmdUser(clawid) {
   console.log(`  Pubkey:         ${rec.pubkey?.slice(0, 60)}...`);
 
   // Pending messages
-  const pending = kvGet(KV.MESSAGES, `pending:${clawid}`);
+  const pending = await kvGet(KV.MESSAGES, `pending:${clawid}`);
   const pendingIds = Array.isArray(pending) ? pending : [];
   console.log(`\n  Pending messages: ${pendingIds.length}`);
   if (pendingIds.length > 0) {
     for (const id of pendingIds.slice(0, 5)) {
-      const msg = kvGet(KV.MESSAGES, `msg:${id}`);
+      const msg = await kvGet(KV.MESSAGES, `msg:${id}`);
       if (msg && typeof msg === 'object') {
         console.log(`    [${id}] from=${msg.from} ts=${fmt(msg.timestamp)} expires=${fmt(msg.expires_at)}`);
       }
@@ -145,7 +189,7 @@ async function cmdUser(clawid) {
   }
 
   // Allowlist
-  const allowlist = kvGet(KV.ALLOWLISTS, `allowlist:${clawid}`);
+  const allowlist = await kvGet(KV.ALLOWLISTS, `allowlist:${clawid}`);
   if (Array.isArray(allowlist) && allowlist.length > 0) {
     console.log(`\n  Allowlist: ${allowlist.join(', ')}`);
   } else {
@@ -156,18 +200,18 @@ async function cmdUser(clawid) {
 
 async function cmdMessages() {
   console.log('\n📨 Pending Messages (all users)\n');
-  const keys = kvList(KV.MESSAGES, 'pending:');
+  const keys = await kvList(KV.MESSAGES, 'pending:');
   if (keys.length === 0) { console.log('  (no pending messages)\n'); return; }
 
   let total = 0;
   for (const key of keys) {
     const clawid = key.replace('pending:', '');
-    const ids = kvGet(KV.MESSAGES, key);
+    const ids = await kvGet(KV.MESSAGES, key);
     if (!Array.isArray(ids) || ids.length === 0) continue;
     total += ids.length;
     console.log(`  ${clawid}: ${ids.length} pending`);
     for (const id of ids.slice(0, 3)) {
-      const msg = kvGet(KV.MESSAGES, `msg:${id}`);
+      const msg = await kvGet(KV.MESSAGES, `msg:${id}`);
       if (msg && typeof msg === 'object') {
         const expires = msg.expires_at ? ` expires=${fmt(msg.expires_at)}` : '';
         console.log(`    ↳ [${id}] from=${msg.from} ts=${fmt(msg.timestamp)}${expires}`);
@@ -180,13 +224,13 @@ async function cmdMessages() {
 
 async function cmdPending() {
   console.log('\n📊 Pending Message Counts\n');
-  const keys = kvList(KV.MESSAGES, 'pending:');
+  const keys = await kvList(KV.MESSAGES, 'pending:');
   if (keys.length === 0) { console.log('  (all queues empty)\n'); return; }
 
   const rows = [];
   for (const key of keys) {
     const clawid = key.replace('pending:', '');
-    const ids = kvGet(KV.MESSAGES, key);
+    const ids = await kvGet(KV.MESSAGES, key);
     rows.push({ clawid, count: Array.isArray(ids) ? ids.length : 0 });
   }
   rows.sort((a, b) => b.count - a.count);
@@ -200,11 +244,11 @@ async function cmdPending() {
 
 async function cmdGroups() {
   console.log('\n👥 Groups\n');
-  const keys = kvList(KV.GROUPS, 'group:');
+  const keys = await kvList(KV.GROUPS, 'group:');
   if (keys.length === 0) { console.log('  (none)\n'); return; }
 
   for (const key of keys) {
-    const g = kvGet(KV.GROUPS, key);
+    const g = await kvGet(KV.GROUPS, key);
     if (!g || typeof g !== 'object') continue;
     console.log(`  ${g.group_id}  owner=${g.owner_clawid}  members=${g.members?.length || 0}  policy=${g.policy?.send_policy || '?'}  created=${fmt(g.created_at)}`);
   }
@@ -215,7 +259,7 @@ async function cmdGroup(groupId) {
   if (!groupId) { console.error('Usage: admin.mjs group <group_id>'); process.exit(1); }
   console.log(`\n👥 Group: ${groupId}\n`);
 
-  const g = kvGet(KV.GROUPS, `group:${groupId}`);
+  const g = await kvGet(KV.GROUPS, `group:${groupId}`);
   if (!g || typeof g !== 'object') { console.log('  Not found.'); return; }
 
   console.log(`  Group ID:   ${g.group_id}`);
@@ -231,12 +275,12 @@ async function cmdGroup(groupId) {
 
 async function cmdAllowlists() {
   console.log('\n🔒 Allowlists\n');
-  const keys = kvList(KV.ALLOWLISTS, 'allowlist:');
+  const keys = await kvList(KV.ALLOWLISTS, 'allowlist:');
   if (keys.length === 0) { console.log('  (no allowlists configured — all users accept all senders)\n'); return; }
 
   for (const key of keys) {
     const clawid = key.replace('allowlist:', '');
-    const list = kvGet(KV.ALLOWLISTS, key);
+    const list = await kvGet(KV.ALLOWLISTS, key);
     console.log(`  ${clawid}: [${Array.isArray(list) ? list.join(', ') : '?'}]`);
   }
   console.log('');
@@ -245,7 +289,7 @@ async function cmdAllowlists() {
 async function cmdDeleteUser(clawid) {
   if (!clawid) { console.error('Usage: admin.mjs delete-user <clawid>'); process.exit(1); }
 
-  const rec = kvGet(KV.REGISTRY, `registry:${clawid}`);
+  const rec = await kvGet(KV.REGISTRY, `registry:${clawid}`);
   if (!rec || typeof rec !== 'object') {
     console.error(`  User "${clawid}" not found.`);
     process.exit(1);
@@ -255,25 +299,21 @@ async function cmdDeleteUser(clawid) {
 
   // Delete token index
   if (rec.access_token) {
-    wrangler(`kv key delete --namespace-id ${KV.REGISTRY} "token:${rec.access_token}"`);
+    await kvDelete(KV.REGISTRY, `token:${rec.access_token}`);
     console.log(`  ✓ Token index removed`);
   }
 
   // Delete registry entry
-  wrangler(`kv key delete --namespace-id ${KV.REGISTRY} "registry:${clawid}"`);
+  await kvDelete(KV.REGISTRY, `registry:${clawid}`);
   console.log(`  ✓ Registry entry removed`);
 
   // Delete pubkey history if any
-  try {
-    wrangler(`kv key delete --namespace-id ${KV.REGISTRY} "pubkey_history:${clawid}"`);
-    console.log(`  ✓ Pubkey history removed`);
-  } catch { /* may not exist */ }
+  await kvDelete(KV.REGISTRY, `pubkey_history:${clawid}`);
+  console.log(`  ✓ Pubkey history removed`);
 
   // Delete pending message index (messages themselves expire via TTL)
-  try {
-    wrangler(`kv key delete --namespace-id ${KV.MESSAGES} "pending:${clawid}"`);
-    console.log(`  ✓ Pending message index removed`);
-  } catch { /* may not exist */ }
+  await kvDelete(KV.MESSAGES, `pending:${clawid}`);
+  console.log(`  ✓ Pending message index removed`);
 
   console.log(`\n  Done. "${clawid}" can now re-register fresh.\n`);
 }
@@ -281,23 +321,25 @@ async function cmdDeleteUser(clawid) {
 async function cmdStats() {
   console.log('\n📈 Broker Stats\n');
 
-  const userKeys = kvList(KV.REGISTRY, 'registry:');
-  const groupKeys = kvList(KV.GROUPS, 'group:');
-  const pendingKeys = kvList(KV.MESSAGES, 'pending:');
-  const msgKeys = kvList(KV.MESSAGES, 'msg:');
-  const allowlistKeys = kvList(KV.ALLOWLISTS, 'allowlist:');
+  const [userKeys, groupKeys, pendingKeys, msgKeys, allowlistKeys] = await Promise.all([
+    kvList(KV.REGISTRY, 'registry:'),
+    kvList(KV.GROUPS, 'group:'),
+    kvList(KV.MESSAGES, 'pending:'),
+    kvList(KV.MESSAGES, 'msg:'),
+    kvList(KV.ALLOWLISTS, 'allowlist:'),
+  ]);
 
+  const pendingCounts = await Promise.all(pendingKeys.map(key => kvGet(KV.MESSAGES, key)));
   let totalPending = 0;
-  for (const key of pendingKeys) {
-    const ids = kvGet(KV.MESSAGES, key);
+  for (const ids of pendingCounts) {
     if (Array.isArray(ids)) totalPending += ids.length;
   }
 
   // Last seen
+  const userRecs = await Promise.all(userKeys.map(key => kvGet(KV.REGISTRY, key)));
   let lastActive = null;
   let lastActiveClawid = '';
-  for (const key of userKeys) {
-    const rec = kvGet(KV.REGISTRY, key);
+  for (const rec of userRecs) {
     if (rec?.last_seen && (!lastActive || rec.last_seen > lastActive)) {
       lastActive = rec.last_seen;
       lastActiveClawid = rec.clawid;
@@ -316,6 +358,64 @@ async function cmdStats() {
   console.log('');
 }
 
+async function cmdPurge(scope) {
+  const SCOPES = {
+    all:       '清空所有 KV 数据（用户、消息、群组、allowlist）',
+    messages:  '清空所有消息（pending 索引 + msg 对象）',
+    users:     '清空所有用户注册记录（registry + token 索引）',
+    groups:    '清空所有群组',
+    allowlists:'清空所有 allowlist',
+  };
+
+  if (!scope || !SCOPES[scope]) {
+    console.error('\n用法: admin.mjs purge <scope>\n');
+    console.error('可用 scope:');
+    for (const [s, desc] of Object.entries(SCOPES)) {
+      console.error(`  ${s.padEnd(12)} ${desc}`);
+    }
+    console.error('\n⚠️  此操作不可撤销，请谨慎使用。\n');
+    process.exit(1);
+  }
+
+  // Confirm via --yes flag or interactive prompt
+  if (!process.argv.includes('--yes')) {
+    process.stdout.write(`\n⚠️  即将执行: purge ${scope}\n   ${SCOPES[scope]}\n\n   输入 "yes" 确认: `);
+    const answer = await new Promise(resolve => {
+      process.stdin.setEncoding('utf8');
+      process.stdin.once('data', d => resolve(d.trim()));
+    });
+    if (answer !== 'yes') { console.log('\n  已取消。\n'); process.exit(0); }
+  }
+
+  console.log(`\n🗑️  Purging: ${scope}\n`);
+
+  async function purgeNamespace(namespaceId, label, prefix = '') {
+    const keys = await kvList(namespaceId, prefix);
+    if (keys.length === 0) { console.log(`  ${label}: (空，跳过)`); return 0; }
+    await kvBulkDelete(namespaceId, keys);
+    console.log(`  ✓ ${label}: 删除 ${keys.length} 条`);
+    return keys.length;
+  }
+
+  let total = 0;
+
+  if (scope === 'messages' || scope === 'all') {
+    total += await purgeNamespace(KV.MESSAGES, 'MESSAGES (pending + msg)', '');
+  }
+  if (scope === 'users' || scope === 'all') {
+    // registry:* + token:* + ratelimit:* + dedup:* + pubkey_history:*
+    total += await purgeNamespace(KV.REGISTRY, 'REGISTRY (users + tokens + dedup)', '');
+  }
+  if (scope === 'groups' || scope === 'all') {
+    total += await purgeNamespace(KV.GROUPS, 'GROUPS', '');
+  }
+  if (scope === 'allowlists' || scope === 'all') {
+    total += await purgeNamespace(KV.ALLOWLISTS, 'ALLOWLISTS', '');
+  }
+
+  console.log(`\n  完成，共删除 ${total} 条记录。\n`);
+}
+
 // ─── main ────────────────────────────────────────────────────────────────────
 
 const HELP = `
@@ -324,15 +424,16 @@ MoltPost Broker Admin Tool
 Usage: node scripts/admin.mjs <command> [args]
 
 Commands:
-  stats                  总览统计（用户数、消息数等）
-  users                  注册用户列表
-  user <clawid>          某用户详情（注册时间、最后在线、待消息、allowlist）
-  delete-user <clawid>   删除用户注册记录，让对方可以重新注册（解决 token 失效死锁）
-  messages               所有用户的待投递消息
-  pending                各用户待拉取消息数（柱状图）
-  groups                 群组列表
-  group <group_id>       某群组详情（成员、策略）
-  allowlists             所有 allowlist 配置
+  stats                        总览统计（用户数、消息数等）
+  users                        注册用户列表
+  user <clawid>                某用户详情（注册时间、最后在线、待消息、allowlist）
+  delete-user <clawid>         删除用户注册记录，让对方可以重新注册
+  messages                     所有用户的待投递消息
+  pending                      各用户待拉取消息数（柱状图）
+  groups                       群组列表
+  group <group_id>             某群组详情（成员、策略）
+  allowlists                   所有 allowlist 配置
+  purge <scope> [--yes]        一键清空数据（scope: all/messages/users/groups/allowlists）
 `;
 
 const [,, cmd, arg] = process.argv;
@@ -353,6 +454,7 @@ try {
     case 'groups':     await cmdGroups(); break;
     case 'group':      await cmdGroup(arg); break;
     case 'allowlists': await cmdAllowlists(); break;
+    case 'purge':      await cmdPurge(arg); break;
     default:
       console.error(`Unknown command: ${cmd}`);
       console.log(HELP);
