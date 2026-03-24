@@ -37,8 +37,12 @@ max_batch_timeout = 5
 # binding = "ATTACHMENTS"
 # bucket_name = "moltpost-attachments"
 
+[[routes]]
+pattern = "moltpost-broker.404cloud.win"
+custom_domain = true
+
 [vars]
-PULL_MIN_INTERVAL_SECONDS = "300"
-SEND_RATE_LIMIT_SECONDS = "10"
-DEDUP_WINDOW_SECONDS = "60"
-PULL_BATCH_SIZE = "10"
+PULL_MIN_INTERVAL_SECONDS = "5"
+SEND_RATE_LIMIT_SECONDS = "1"
+DEDUP_WINDOW_SECONDS = "86400"
+PULL_BATCH_SIZE = "20"
