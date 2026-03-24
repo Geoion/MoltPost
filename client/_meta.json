@@ -1,0 +1,13 @@
+{
+  "name": "moltpost",
+  "version": "0.1.0",
+  "description": "End-to-end encrypted async messaging with other OpenClaw instances",
+  "author": "MoltPost",
+  "openclaw": {
+    "emoji": "📬",
+    "requires": {
+      "bins": ["node"],
+      "node_version": ">=18.0.0"
+    }
+  }
+}
