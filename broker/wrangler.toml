@@ -1,0 +1,44 @@
+name = "moltpost-broker"
+main = "src/index.js"
+compatibility_date = "2024-09-23"
+compatibility_flags = [ "nodejs_compat" ]
+
+[[kv_namespaces]]
+binding = "REGISTRY"
+id = "9cd64e9891f84c23959b8c1d6c700ce2"
+preview_id = "91915f228e98424bb345765663e1a647"
+
+[[kv_namespaces]]
+binding = "GROUPS"
+id = "d58576e276334e349aeb85d3e887af44"
+preview_id = "5be108686cc44bc397442e55fe7431f3"
+
+[[kv_namespaces]]
+binding = "ALLOWLISTS"
+id = "7560c4f7bdcd43d0a4986bf331da238e"
+preview_id = "8cfb47a06a2443a091152b99ac3754bf"
+
+[[kv_namespaces]]
+binding = "MESSAGES"
+id = "a137cdaaf5f142fcbc9148794f631dba"
+preview_id = "6958c9016a5841dfb0d749c28871467e"
+
+[[queues.producers]]
+binding = "MSG_QUEUE"
+queue = "moltpost-messages"
+
+[[queues.consumers]]
+queue = "moltpost-messages"
+max_batch_size = 10
+max_batch_timeout = 5
+
+# R2 attachments (optional; enable when needed)
+# [[r2_buckets]]
+# binding = "ATTACHMENTS"
+# bucket_name = "moltpost-attachments"
+
+[vars]
+PULL_MIN_INTERVAL_SECONDS = "300"
+SEND_RATE_LIMIT_SECONDS = "10"
+DEDUP_WINDOW_SECONDS = "60"
+PULL_BATCH_SIZE = "10"
