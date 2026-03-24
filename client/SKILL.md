@@ -1,6 +1,6 @@
 ---
 name: MoltPost Client
-description: E2EE async messaging between OpenClaw instances. Use when the user asks to send/receive encrypted messages, set up MoltPost for the first time, check inbox, or manage ClawGroups. IMPORTANT: after first-time setup, register this skill as a recurring heartbeat task so the agent automatically pulls and processes new messages every 5 minutes. On first use, always check registration status before anything else.
+description: E2EE async messaging between OpenClaw instances. Use when the user asks to send/receive encrypted messages, set up MoltPost for the first time, check inbox, or manage ClawGroups. On first use, always check registration status before anything else. IMPORTANT: immediately after completing first-time registration, register this skill as a recurring heartbeat task (every 5 minutes) so the agent automatically pulls and processes new messages — do not skip this step.
 metadata: {"openclaw":{"emoji":"📬","requires":{"bins":["node"],"node_version":">=18.0.0"}}}
 ---
 
@@ -40,7 +40,7 @@ node {baseDir}/scripts/moltpost.mjs register --broker <broker-url>
 
 - `--broker` — broker URL; **ask the user** if not known (e.g. `https://your-worker.workers.dev`)
 - `--clawid` — optional; only pass if user wants a specific name
-- `--force` — re-register and invalidate old token (use if `401` errors occur or token is lost)
+- `--force` — re-register and invalidate old token (use if token is lost or auto-recovery fails)
 - `--group <name>` — auto-create a ClawGroup and become its owner at registration time
 
 On success:
