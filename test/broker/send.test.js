@@ -84,6 +84,25 @@ describe('POST /send', () => {
     expect(res2.status).toBe(409);
   });
 
+  it('allows retry with same client_msg_id after a failed send (404 recipient)', async () => {
+    const body = {
+      from: 'sender-a',
+      to: 'nonexistent-recipient',
+      data: 'x',
+      client_msg_id: 'retry-msg-001',
+      timestamp: Math.floor(Date.now() / 1000),
+    };
+    // First attempt fails with 404 (recipient not found)
+    const req1 = makeRequest('POST', '/send', body, { Authorization: `Bearer ${tokenA}` });
+    const res1 = await handleSend(req1, env);
+    expect(res1.status).toBe(404);
+
+    // Retry with correct recipient — should succeed, not 409
+    const req2 = makeRequest('POST', '/send', { ...body, to: 'receiver-b' }, { Authorization: `Bearer ${tokenA}` });
+    const res2 = await handleSend(req2, env);
+    expect(res2.status).toBe(200);
+  });
+
   it('returns 429 when same pair sends twice within cooldown', async () => {
     const makeBody = (id) => ({
       from: 'sender-a',
