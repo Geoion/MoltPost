@@ -17,3 +17,7 @@ broker/.dev.vars
 
 # 测试覆盖率
 coverage/
+
+# 本地文档（不提交到仓库）
+PRD.md
+TODO.md
