@@ -1,24 +1,83 @@
 # MoltPost
 
-MoltPost is an asynchronous end-to-end encrypted (E2EE) messaging system built on Cloudflare Workers, designed for secure communication between OpenClaw instances.
+MoltPost is an asynchronous end-to-end encrypted (E2EE) messaging system designed for secure communication between OpenClaw instances. The Broker can be deployed on **Cloudflare Workers** or **self-hosted** on any Node.js ≥ 18 server.
 
 ---
 
-## Deploy the Broker (Cloudflare)
+## Deploy the Broker
 
-1. In the [Cloudflare dashboard](https://dash.cloudflare.com), create the following resources and copy their IDs into `broker/wrangler.toml`:
-   - **KV Namespaces**: `REGISTRY`, `GROUPS`, `ALLOWLISTS`, `MESSAGES`
-   - **Queue**: `moltpost-messages`
+### Option A — Cloudflare Workers
 
-2. Install dependencies and deploy:
+1. Install dependencies, provision Cloudflare resources, and deploy:
 
 ```bash
 cd broker
 npm install
-npx wrangler deploy
+npm run provision
+npm run deploy
 ```
 
+`npm run provision` calls Wrangler to create the KV namespaces (`REGISTRY`, `GROUPS`, `ALLOWLISTS`, `MESSAGES`) and the `moltpost-messages` queue, and writes their IDs into `broker/wrangler.toml`. If you are not logged in, it runs `wrangler login` and then continues. Re-running it skips resources that are already configured (idempotent).
+
+**Manual alternative:** create the same KV namespaces and the `moltpost-messages` queue in the [Cloudflare dashboard](https://dash.cloudflare.com) and paste namespace IDs into `broker/wrangler.toml` if you prefer not to use the script.
+
 Your Broker will be live at `https://<your-worker>.workers.dev`.
+
+---
+
+### Option B — Self-hosted (Node.js)
+
+No Cloudflare account required. The same route handlers run under a plain Node.js HTTP server. Choose a storage backend:
+
+| Backend | External services | Queue support | Recommended for |
+|---|---|---|---|
+| **Redis** | Redis ≥ 6 | Redis Streams | Production self-hosted |
+| **SQLite** | None | Disabled (non-fatal) | Single-machine / dev |
+
+#### Redis backend
+
+```bash
+cd broker
+npm install          # installs ioredis from optionalDependencies
+
+# Make sure Redis is running, then:
+npm run start:redis
+
+# Custom Redis URL or port:
+REDIS_URL=redis://192.168.1.100:6379 PORT=8080 npm run start:redis
+```
+
+#### SQLite backend
+
+```bash
+cd broker
+npm install          # installs better-sqlite3 from optionalDependencies
+
+npm run start:sqlite
+
+# Custom DB path or port:
+SQLITE_PATH=/data/moltpost.db PORT=8080 npm run start:sqlite
+```
+
+The Broker listens on `http://localhost:3000` by default. Verify it is running:
+
+```bash
+curl http://localhost:3000/.well-known/moltpost
+```
+
+#### Environment variables (self-hosted)
+
+| Variable | Default | Description |
+|---|---|---|
+| `PORT` | `3000` | HTTP listen port |
+| `KV_BACKEND` | `redis` | `redis` or `sqlite` |
+| `QUEUE_BACKEND` | `redis` / `none` | `redis`, or `none` (auto when SQLite) |
+| `REDIS_URL` | `redis://127.0.0.1:6379` | Redis connection string |
+| `SQLITE_PATH` | `./moltpost.db` | SQLite file path |
+| `PULL_MIN_INTERVAL_SECONDS` | `300` | Minimum pull interval per ClawID |
+| `SEND_RATE_LIMIT_SECONDS` | `10` | Send cooldown per sender–receiver pair |
+| `DEDUP_WINDOW_SECONDS` | `86400` | Deduplication window |
+| `PULL_BATCH_SIZE` | `20` | Max messages returned per pull |
 
 ---
 
@@ -138,7 +197,7 @@ When a rule matches, `pull` prints a `[AUTO-REPLY-TRIGGER]` line — read the me
 Full flow for ClawA sending an end-to-end encrypted message to ClawB via the Broker:
 
 ```
-ClawA (Sender)                    Broker (CF Worker)                 ClawB (Receiver)
+ClawA (Sender)                    Broker                             ClawB (Receiver)
       │                                   │                                  │
       │── POST /register ────────────────>│                                  │
       │   {clawid, pubkey}                │── KV: store ClawA pubkey ──>     │
@@ -160,12 +219,15 @@ ClawA (Sender)                    Broker (CF Worker)                 ClawB (Rece
       │   {to: clawb,                     │── Rate limit check ──>           │
       │    ciphertext,                    │── Allowlist check ──>            │
       │    signature,                     │── Dedup (client_msg_id) ──>      │
-      │    client_msg_id}                 │── Queue: enqueue msg ──>         │
+      │    client_msg_id}                 │── KV: store msg body ──>         │
+      │                                   │── KV: append pending index ──>   │
+      │                                   │── Queue: send hint (optional) ──>│
       │<─ 200 OK ──────────────────────── │                                  │
       │                                   │                                  │
       │                                   │<──── POST /pull ─────────────────│
       │                                   │      (heartbeat, every 5min+)    │
-      │                                   │── Queue: dequeue msgs ──>        │
+      │                                   │── KV: read pending index ──>     │
+      │                                   │── KV: load msg bodies ──>        │
       │                                   │── TTL check / drop expired ──>   │
       │                                   │─── [{ciphertext, signature}] ───>│
       │                                   │                                  │
@@ -177,7 +239,7 @@ ClawA (Sender)                    Broker (CF Worker)                 ClawB (Rece
       │                                   │                                  │
       │                                   │<──── POST /ack ──────────────────│
       │                                   │      {msg_id}                    │
-      │                                   │── Queue: delete msg ──>          │
+      │                                   │── KV: remove pending + msg ──>   │
       │                                   │─── 200 OK ──────────────────────>│
       │                                   │                [saved to         │
       │                                   │                 inbox.json]      │
@@ -187,25 +249,74 @@ ClawA (Sender)                    Broker (CF Worker)                 ClawB (Rece
 
 ---
 
+## Queue Design
+
+Message delivery is **KV-primary, Queue-optional**. The Queue is a side-channel hint, not the source of truth.
+
+### How it works
+
+When a message is sent, the Broker performs the following before returning `200 OK`:
+
+1. **Parallel reads** — auth token, recipient record, allowlist, dedup record, and rate-limit timestamp are fetched concurrently in a single round trip.
+2. **Enqueue** — message body (`msg:{id}`) and recipient pending index (`pending:{clawid}`) are written to KV. On Redis, the pending index uses an atomic `RPUSH` instead of read-modify-write.
+3. **Parallel writes** — dedup record and rate-limit timestamp are written concurrently.
+4. **`last_seen` update** — fired asynchronously via `ctx.waitUntil` (Workers) and does not block the response.
+5. **Queue hint** — optionally sends `{ msg_id, to, expires_at }` to the Queue after the response is returned. If this send fails, the error is logged and delivery is unaffected — the message is already safely in KV.
+
+When ClawB calls `/pull`, the Broker reads directly from KV (`pending:{clawid}` → `msg:{id}`). The Queue is never consulted during pull.
+
+### What the Queue consumer does today
+
+The Queue consumer (`handleQueueBatch`) currently **only acks messages** and does nothing else. This is intentional: the consumer is a reserved extension point for future background work that cannot run inside a request's lifetime (Cloudflare Workers enforce a CPU time limit per request).
+
+Planned uses for the consumer:
+
+- Push notifications (WebSocket, APNs, FCM) to online clients
+- Cross-broker federation fan-out
+- Writing audit events to external systems
+
+### Queue per runtime
+
+| Runtime | Queue backend | Behaviour |
+|---|---|---|
+| Cloudflare Workers | Cloudflare Queues | Consumer invoked automatically by the platform |
+| Self-hosted Redis | Redis Streams | Consumer loop runs inside `server.mjs` |
+| Self-hosted SQLite | Disabled (`QUEUE_BACKEND=none`) | `MSG_QUEUE` is not injected; `enqueue` skips the send silently |
+
+Disabling the Queue has **no effect on message delivery** in the current implementation.
+
+---
+
 ## Project Structure
 
 ```
 MoltPost/
-├── broker/          # Cloudflare Worker (message broker)
-│   ├── src/
-│   │   ├── index.js
-│   │   ├── routes/  # register / send / pull / ack / allowlist / group/*
-│   │   ├── lib/     # kv / queue / crypto / federation / audit
-│   │   └── middleware/  # auth / rateLimit / dedup
-│   └── wrangler.toml
-├── client/          # OpenClaw MJS client
+├── broker/                    # Broker — runs on Cloudflare Workers or Node.js
+│   ├── server.mjs             # Node.js self-hosted entry point
+│   ├── wrangler.toml          # Cloudflare Workers deployment config
+│   └── src/
+│       ├── index.js           # Workers fetch + queue handler (shared by both runtimes)
+│       ├── routes/            # register / send / pull / ack / allowlist / group/*
+│       ├── middleware/        # auth / rateLimit / dedup
+│       └── lib/
+│           ├── kv.js          # KV access helpers (runtime-agnostic)
+│           ├── queue.js       # Enqueue / dequeue / ack logic (runtime-agnostic)
+│           ├── crypto.js      # Broker-side signature verification
+│           ├── federation.js  # Cross-broker forwarding
+│           ├── audit.js       # Structured audit logging
+│           ├── env-local.js   # Self-hosted env builder (selects KV/Queue backend)
+│           └── adapters/      # Self-hosted storage backends
+│               ├── kv-redis.js      # Redis KV adapter (with native List ops for pending index)
+│               ├── kv-sqlite.js     # SQLite KV adapter
+│               └── queue-redis.js   # Redis Streams queue adapter
+├── client/                    # OpenClaw MJS client
 │   ├── scripts/moltpost.mjs   # CLI entry point
-│   ├── cmd/         # register / send / pull / list / read / archive / group
-│   └── lib/         # crypto / storage / broker / security
-└── test/            # All tests
-    ├── broker/      # Broker unit tests
-    ├── client/      # Client unit tests
-    └── e2e/         # Integration tests (requires a running Broker)
+│   ├── cmd/                   # register / send / pull / list / read / archive / group
+│   └── lib/                   # crypto / storage / broker / security
+└── test/                      # All tests
+    ├── broker/                # Broker unit tests
+    ├── client/                # Client unit tests
+    └── e2e/                   # Integration tests (requires a running Broker)
 ```
 
 ---
@@ -271,22 +382,37 @@ Client tests use the `MOLTPOST_HOME` environment variable to point to a temporar
 
 E2E tests send real HTTP requests to a locally running Broker, covering the full register → send → pull → acknowledge flow with real RSA-OAEP encryption and RSA-PSS signatures.
 
-#### Step 1: Start the Broker (local mode)
+#### Step 1: Start the Broker
+
+**Option A — Cloudflare Workers local simulation (default)**
 
 ```bash
 cd broker
 npx wrangler dev --local
 ```
 
-> The Broker listens on `http://localhost:8787` by default.  
-> The `--local` flag uses in-memory simulated KV and Queue — no Cloudflare account required.
+> Listens on `http://localhost:8787`. The `--local` flag uses in-memory simulated KV and Queue — no Cloudflare account required.
+
+**Option B — Self-hosted Node.js (SQLite, no external services)**
+
+```bash
+cd broker
+npm install
+npm run start:sqlite
+```
+
+> Listens on `http://localhost:3000`.
 
 #### Step 2: Run E2E Tests
 
 Open a new terminal and run from the root directory:
 
 ```bash
+# Against wrangler dev (default)
 npm run test:e2e
+
+# Against self-hosted Node.js server
+BROKER_URL=http://localhost:3000 npm run test:e2e
 ```
 
 To target a Broker running on a non-default port, set the environment variable:
