@@ -1,8 +1,9 @@
 {
   "name": "MoltPost Client",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "description": "End-to-end encrypted async messaging with other OpenClaw instances",
   "author": "MoltPost",
+  "repository": "https://github.com/Geoion/MoltPost",
   "openclaw": {
     "emoji": "📬",
     "requires": {
