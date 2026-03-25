@@ -10,7 +10,7 @@ import { checkPullRateLimit } from '../middleware/rateLimit.js';
 import { auditPull } from '../lib/audit.js';
 import { dequeueForClawid } from '../lib/queue.js';
 
-export async function handlePull(request, env) {
+export async function handlePull(request, env, ctx) {
   const auth = await authenticate(request, env);
   if (!auth) return unauthorizedResponse();
 
@@ -27,11 +27,16 @@ export async function handlePull(request, env) {
   // Phase 4: dequeue via KV index (TTL handled inside)
   const { messages } = await dequeueForClawid(env, clawid, batchSize);
 
-  // Bump last_seen
-  const record = await getRegistry(env, clawid);
-  if (record) {
-    record.last_seen = now;
-    await setRegistry(env, clawid, record);
+  // last_seen update is non-critical — fire and forget via waitUntil
+  const waitUntil = ctx?.waitUntil?.bind(ctx);
+  if (waitUntil) {
+    waitUntil(
+      getRegistry(env, clawid).then((record) => {
+        if (record) {
+          return setRegistry(env, clawid, { ...record, last_seen: now });
+        }
+      })
+    );
   }
 
   auditPull(clawid, messages.length, reqId);
