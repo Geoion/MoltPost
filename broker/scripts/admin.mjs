@@ -23,13 +23,47 @@ import { homedir } from 'os';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BROKER_DIR = path.resolve(__dirname, '..');
 
-// KV namespace IDs from wrangler.toml
-const KV = {
-  REGISTRY:  '9cd64e9891f84c23959b8c1d6c700ce2',
-  GROUPS:    'd58576e276334e349aeb85d3e887af44',
-  ALLOWLISTS:'7560c4f7bdcd43d0a4986bf331da238e',
-  MESSAGES:  'a137cdaaf5f142fcbc9148794f631dba',
-};
+const WRANGLER_TOML = process.env.WRANGLER_TOML
+  ? path.resolve(process.env.WRANGLER_TOML)
+  : path.join(BROKER_DIR, 'wrangler.toml');
+
+/** Parse [[kv_namespaces]] in wrangler.toml: binding → production namespace id (not preview_id). */
+function parseKvNamespacesFromWrangler(content) {
+  const map = {};
+  const parts = content.split('[[kv_namespaces]]');
+  for (let i = 1; i < parts.length; i++) {
+    const block = parts[i].split(/\[\[/)[0];
+    const binding = block.match(/binding\s*=\s*"([^"]+)"/);
+    const id = block.match(/^\s*id\s*=\s*"([^"]+)"/m);
+    if (binding && id) map[binding[1]] = id[1];
+  }
+  return map;
+}
+
+function loadBrokerKv() {
+  let content;
+  try {
+    content = readFileSync(WRANGLER_TOML, 'utf8');
+  } catch (e) {
+    throw new Error(`Cannot read ${WRANGLER_TOML}: ${e.message}`);
+  }
+  const byBinding = parseKvNamespacesFromWrangler(content);
+  const required = ['REGISTRY', 'GROUPS', 'ALLOWLISTS', 'MESSAGES'];
+  const kv = {};
+  for (const name of required) {
+    const id = byBinding[name];
+    if (!id) {
+      const found = Object.keys(byBinding).join(', ') || '(none)';
+      throw new Error(
+        `Missing KV namespace with binding "${name}" in ${WRANGLER_TOML}. Parsed bindings: ${found}`,
+      );
+    }
+    kv[name] = id;
+  }
+  return kv;
+}
+
+const KV = loadBrokerKv();
 
 const ACCOUNT_ID = 'b9e5dfb41a164d00dc9bd4cffc728742';
 
