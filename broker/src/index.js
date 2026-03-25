@@ -73,9 +73,9 @@ export default {
       } else if (path === '/peer' && method === 'GET') {
         response = await handlePeer(request, env);
       } else if (path === '/send' && method === 'POST') {
-        response = await handleSend(request, env);
+        response = await handleSend(request, env, ctx);
       } else if (path === '/pull' && method === 'POST') {
-        response = await handlePull(request, env);
+        response = await handlePull(request, env, ctx);
       } else if (path === '/ack' && method === 'POST') {
         response = await handleAck(request, env);
       } else if (path === '/allowlist') {
