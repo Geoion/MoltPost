@@ -2,6 +2,7 @@ name = "moltpost-broker"
 main = "src/index.js"
 compatibility_date = "2024-09-23"
 compatibility_flags = [ "nodejs_compat" ]
+account_id = "b9e5dfb41a164d00dc9bd4cffc728742"
 
 [[kv_namespaces]]
 binding = "REGISTRY"
