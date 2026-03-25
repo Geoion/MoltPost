@@ -1,21 +1,21 @@
 #!/usr/bin/env node
 /**
  * MoltPost Broker Admin Tool
- * 通过 wrangler kv 直接查询 Broker 的 KV 数据
+ * Query Broker KV data directly via the Wrangler KV API.
  *
- * 用法：
- *   node scripts/admin.mjs users          # 注册用户列表
- *   node scripts/admin.mjs user <clawid>  # 某用户详情
- *   node scripts/admin.mjs messages       # 所有待投递消息
- *   node scripts/admin.mjs pending        # 各用户待拉取消息数
- *   node scripts/admin.mjs groups         # 群组列表
- *   node scripts/admin.mjs group <id>     # 某群组详情
- *   node scripts/admin.mjs allowlists     # 所有 allowlist
- *   node scripts/admin.mjs stats          # 总览统计
+ * Usage:
+ *   node scripts/admin.mjs users          # List registered users
+ *   node scripts/admin.mjs user <clawid>  # User details
+ *   node scripts/admin.mjs messages       # All pending messages
+ *   node scripts/admin.mjs pending        # Pending counts per user
+ *   node scripts/admin.mjs groups         # Group list
+ *   node scripts/admin.mjs group <id>     # Group details
+ *   node scripts/admin.mjs allowlists     # All allowlists
+ *   node scripts/admin.mjs stats          # Overview stats
  */
 
 import { execSync } from 'child_process';
-import { readFileSync } from 'fs';
+import { readFileSync, writeFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { homedir } from 'os';
@@ -33,30 +33,87 @@ const KV = {
 
 const ACCOUNT_ID = 'b9e5dfb41a164d00dc9bd4cffc728742';
 
-// Read OAuth token from wrangler config
-function getWranglerToken() {
-  // Prefer CLOUDFLARE_API_TOKEN env var
-  if (process.env.CLOUDFLARE_API_TOKEN) return process.env.CLOUDFLARE_API_TOKEN;
+// Cloudflare OAuth token endpoint
+const CF_TOKEN_URL = 'https://dash.cloudflare.com/oauth2/token';
 
-  const configPath = path.join(homedir(), 'Library', 'Preferences', '.wrangler', 'config', 'default.toml');
-  try {
-    const content = readFileSync(configPath, 'utf8');
-    const match = content.match(/oauth_token\s*=\s*"([^"]+)"/);
-    if (match) return match[1];
-  } catch { /* ignore */ }
-
-  // Fallback: try Linux path
-  const linuxPath = path.join(homedir(), '.config', 'wrangler', 'config', 'default.toml');
-  try {
-    const content = readFileSync(linuxPath, 'utf8');
-    const match = content.match(/oauth_token\s*=\s*"([^"]+)"/);
-    if (match) return match[1];
-  } catch { /* ignore */ }
-
-  throw new Error('No Cloudflare API token found. Run `wrangler login` or set CLOUDFLARE_API_TOKEN.');
+function wranglerConfigPath() {
+  const candidates = [
+    path.join(homedir(), 'Library', 'Preferences', '.wrangler', 'config', 'default.toml'),
+    path.join(homedir(), '.config', 'wrangler', 'config', 'default.toml'),
+  ];
+  for (const p of candidates) {
+    try { readFileSync(p); return p; } catch { /* skip */ }
+  }
+  return null;
 }
 
-const CF_TOKEN = getWranglerToken();
+function parseToml(content) {
+  const result = {};
+  for (const line of content.split('\n')) {
+    const m = line.match(/^(\w+)\s*=\s*"([^"]+)"/);
+    if (m) result[m[1]] = m[2];
+  }
+  return result;
+}
+
+function serializeToml(obj, originalContent) {
+  // Replace values in-place to preserve formatting and array fields
+  let out = originalContent;
+  for (const [k, v] of Object.entries(obj)) {
+    out = out.replace(new RegExp(`(${k}\\s*=\\s*)"[^"]*"`), `$1"${v}"`);
+  }
+  return out;
+}
+
+async function refreshOAuthToken(configPath, refreshToken) {
+  const res = await fetch(CF_TOKEN_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+      client_id: '54d11594-84e4-41aa-b438-e81b8fa78ee7', // wrangler's public client_id
+    }),
+  });
+  if (!res.ok) throw new Error(`Token refresh failed: ${res.status} ${await res.text()}`);
+  const json = await res.json();
+
+  // Write updated tokens back to config file
+  const original = readFileSync(configPath, 'utf8');
+  const expiry = new Date(Date.now() + json.expires_in * 1000).toISOString();
+  const updated = serializeToml({
+    oauth_token: json.access_token,
+    expiration_time: expiry,
+    ...(json.refresh_token ? { refresh_token: json.refresh_token } : {}),
+  }, original);
+  writeFileSync(configPath, updated, 'utf8');
+
+  return json.access_token;
+}
+
+async function getWranglerToken() {
+  // Prefer CLOUDFLARE_API_TOKEN env var (static API token, never expires)
+  if (process.env.CLOUDFLARE_API_TOKEN) return process.env.CLOUDFLARE_API_TOKEN;
+
+  const configPath = wranglerConfigPath();
+  if (!configPath) throw new Error('No Cloudflare credentials found. Run `wrangler login` or set CLOUDFLARE_API_TOKEN.');
+
+  const content = readFileSync(configPath, 'utf8');
+  const cfg = parseToml(content);
+
+  if (!cfg.oauth_token) throw new Error('No oauth_token in wrangler config. Run `wrangler login`.');
+
+  // Check expiry with 60s buffer
+  const expired = cfg.expiration_time && new Date(cfg.expiration_time).getTime() - 60000 < Date.now();
+  if (expired && cfg.refresh_token) {
+    process.stderr.write('  ℹ️  OAuth token expired, refreshing...\n');
+    return await refreshOAuthToken(configPath, cfg.refresh_token);
+  }
+
+  return cfg.oauth_token;
+}
+
+const CF_TOKEN = await getWranglerToken();
 const CF_BASE = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/storage/kv/namespaces`;
 
 async function kvList(namespaceId, prefix = '') {
@@ -114,7 +171,7 @@ async function kvBulkDelete(namespaceId, keys) {
 
 function fmt(ts) {
   if (!ts) return 'N/A';
-  return new Date(ts * 1000).toLocaleString('zh-CN', { hour12: false });
+  return new Date(ts * 1000).toLocaleString('en-US', { hour12: false });
 }
 
 function ago(ts) {
@@ -360,40 +417,40 @@ async function cmdStats() {
 
 async function cmdPurge(scope) {
   const SCOPES = {
-    all:       '清空所有 KV 数据（用户、消息、群组、allowlist）',
-    messages:  '清空所有消息（pending 索引 + msg 对象）',
-    users:     '清空所有用户注册记录（registry + token 索引）',
-    groups:    '清空所有群组',
-    allowlists:'清空所有 allowlist',
+    all:        'Delete all KV data (users, messages, groups, allowlists)',
+    messages:   'Delete all messages (pending index + msg objects)',
+    users:      'Delete all user registrations (registry + token index)',
+    groups:     'Delete all groups',
+    allowlists: 'Delete all allowlists',
   };
 
   if (!scope || !SCOPES[scope]) {
-    console.error('\n用法: admin.mjs purge <scope>\n');
-    console.error('可用 scope:');
+    console.error('\nUsage: admin.mjs purge <scope>\n');
+    console.error('Available scopes:');
     for (const [s, desc] of Object.entries(SCOPES)) {
       console.error(`  ${s.padEnd(12)} ${desc}`);
     }
-    console.error('\n⚠️  此操作不可撤销，请谨慎使用。\n');
+    console.error('\n⚠️  This action cannot be undone. Proceed with caution.\n');
     process.exit(1);
   }
 
   // Confirm via --yes flag or interactive prompt
   if (!process.argv.includes('--yes')) {
-    process.stdout.write(`\n⚠️  即将执行: purge ${scope}\n   ${SCOPES[scope]}\n\n   输入 "yes" 确认: `);
+    process.stdout.write(`\n⚠️  About to run: purge ${scope}\n   ${SCOPES[scope]}\n\n   Type "yes" to confirm: `);
     const answer = await new Promise(resolve => {
       process.stdin.setEncoding('utf8');
       process.stdin.once('data', d => resolve(d.trim()));
     });
-    if (answer !== 'yes') { console.log('\n  已取消。\n'); process.exit(0); }
+    if (answer !== 'yes') { console.log('\n  Cancelled.\n'); process.exit(0); }
   }
 
   console.log(`\n🗑️  Purging: ${scope}\n`);
 
   async function purgeNamespace(namespaceId, label, prefix = '') {
     const keys = await kvList(namespaceId, prefix);
-    if (keys.length === 0) { console.log(`  ${label}: (空，跳过)`); return 0; }
+    if (keys.length === 0) { console.log(`  ${label}: (empty, skipped)`); return 0; }
     await kvBulkDelete(namespaceId, keys);
-    console.log(`  ✓ ${label}: 删除 ${keys.length} 条`);
+    console.log(`  ✓ ${label}: deleted ${keys.length} key(s)`);
     return keys.length;
   }
 
@@ -413,7 +470,7 @@ async function cmdPurge(scope) {
     total += await purgeNamespace(KV.ALLOWLISTS, 'ALLOWLISTS', '');
   }
 
-  console.log(`\n  完成，共删除 ${total} 条记录。\n`);
+  console.log(`\n  Done. Deleted ${total} key(s) total.\n`);
 }
 
 // ─── main ────────────────────────────────────────────────────────────────────
@@ -424,16 +481,16 @@ MoltPost Broker Admin Tool
 Usage: node scripts/admin.mjs <command> [args]
 
 Commands:
-  stats                        总览统计（用户数、消息数等）
-  users                        注册用户列表
-  user <clawid>                某用户详情（注册时间、最后在线、待消息、allowlist）
-  delete-user <clawid>         删除用户注册记录，让对方可以重新注册
-  messages                     所有用户的待投递消息
-  pending                      各用户待拉取消息数（柱状图）
-  groups                       群组列表
-  group <group_id>             某群组详情（成员、策略）
-  allowlists                   所有 allowlist 配置
-  purge <scope> [--yes]        一键清空数据（scope: all/messages/users/groups/allowlists）
+  stats                        Overview (user count, message counts, etc.)
+  users                        List registered users
+  user <clawid>                User details (registered, last seen, pending, allowlist)
+  delete-user <clawid>         Remove registration so the ClawID can register again
+  messages                     Pending messages for all users
+  pending                      Pending counts per user (bar chart)
+  groups                       Group list
+  group <group_id>             Group details (members, policy)
+  allowlists                   All allowlist configs
+  purge <scope> [--yes]        Bulk delete data (scope: all/messages/users/groups/allowlists)
 `;
 
 const [,, cmd, arg] = process.argv;
