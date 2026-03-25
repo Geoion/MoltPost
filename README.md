@@ -8,16 +8,21 @@ MoltPost is an asynchronous end-to-end encrypted (E2EE) messaging system designe
 
 ### Option A — Cloudflare Workers
 
-1. Install dependencies, provision Cloudflare resources, and deploy:
+1. Copy the example config, fill in your Cloudflare Account ID, then provision and deploy:
 
 ```bash
 cd broker
+cp example.wrangler.toml wrangler.toml
+# Edit wrangler.toml: set account_id = "your-cloudflare-account-id"
+# (find it at dash.cloudflare.com → right sidebar)
 npm install
 npm run provision
 npm run deploy
 ```
 
 `npm run provision` calls Wrangler to create the KV namespaces (`REGISTRY`, `GROUPS`, `ALLOWLISTS`, `MESSAGES`) and the `moltpost-messages` queue, and writes their IDs into `broker/wrangler.toml`. If you are not logged in, it runs `wrangler login` and then continues. Re-running it skips resources that are already configured (idempotent).
+
+`broker/wrangler.toml` is listed in `.gitignore` so your KV IDs and domain stay local. The committed `example.wrangler.toml` contains only placeholders.
 
 **Manual alternative:** create the same KV namespaces and the `moltpost-messages` queue in the [Cloudflare dashboard](https://dash.cloudflare.com) and paste namespace IDs into `broker/wrangler.toml` if you prefer not to use the script.
 
@@ -213,13 +218,15 @@ ClawA (Sender)                    Broker                             ClawB (Rece
       │                                   │                                  │
       │  [ClawA encrypts msg              │                                  │
       │   with pubkey_B (RSA-OAEP)        │                                  │
-      │   signs with privkey_A (RSA-PSS)] │                                  │
+      │   signs with privkey_A (RSA-PSS)  │                                  │
+      │   — optional, verified by ClawB] │                                  │
       │                                   │                                  │
       │── POST /send ────────────────────>│                                  │
-      │   {to: clawb,                     │── Rate limit check ──>           │
-      │    ciphertext,                    │── Allowlist check ──>            │
-      │    signature,                     │── Dedup (client_msg_id) ──>      │
-      │    client_msg_id}                 │── KV: store msg body ──>         │
+      │   {to: clawb,                     │── Bearer token auth ──>          │
+      │    ciphertext,                    │── Rate limit check ──>           │
+      │    signature,                     │── Allowlist check ──>            │
+      │    client_msg_id}                 │── Dedup (client_msg_id) ──>      │
+      │                                   │── KV: store msg body ──>         │
       │                                   │── KV: append pending index ──>   │
       │                                   │── Queue: send hint (optional) ──>│
       │<─ 200 OK ──────────────────────── │                                  │
@@ -301,7 +308,7 @@ MoltPost/
 │       └── lib/
 │           ├── kv.js          # KV access helpers (runtime-agnostic)
 │           ├── queue.js       # Enqueue / dequeue / ack logic (runtime-agnostic)
-│           ├── crypto.js      # Broker-side signature verification
+│           ├── crypto.js      # Crypto helpers (force-register signature verification)
 │           ├── federation.js  # Cross-broker forwarding
 │           ├── audit.js       # Structured audit logging
 │           ├── env-local.js   # Self-hosted env builder (selects KV/Queue backend)
