@@ -30,14 +30,14 @@ function cleanTmpDir() {
   }
 }
 
-describe('config.json 读写', () => {
+describe('config.json read/write', () => {
   beforeAll(cleanTmpDir);
 
-  it('readConfig 在文件不存在时返回 null', () => {
+  it('readConfig returns null when file is missing', () => {
     expect(readConfig()).toBeNull();
   });
 
-  it('writeConfig + readConfig 往返一致', () => {
+  it('writeConfig and readConfig round-trip', () => {
     const config = {
       broker_url: 'https://test.workers.dev',
       clawid: 'test-claw',
@@ -47,23 +47,23 @@ describe('config.json 读写', () => {
     expect(readConfig()).toEqual(config);
   });
 
-  it('writeConfig 自动创建目录并写入文件', () => {
+  it('writeConfig creates directories and writes the file', () => {
     cleanTmpDir();
     writeConfig({ clawid: 'test' });
     expect(fs.existsSync(path.join(tmpDir, 'config.json'))).toBe(true);
   });
 });
 
-describe('inbox/active.json 滚动队列', () => {
+describe('inbox/active.json rolling queue', () => {
   beforeAll(cleanTmpDir);
 
-  it('readActiveInbox 在文件不存在时返回空结构', () => {
+  it('readActiveInbox returns empty structure when file is missing', () => {
     const inbox = readActiveInbox();
     expect(inbox.version).toBe(1);
     expect(inbox.messages).toEqual([]);
   });
 
-  it('appendMessages 追加消息', () => {
+  it('appendMessages appends messages', () => {
     cleanTmpDir();
     const now = Math.floor(Date.now() / 1000);
     const msgs = [
@@ -76,7 +76,7 @@ describe('inbox/active.json 滚动队列', () => {
     expect(inbox.messages[0].id).toBe('msg-1');
   });
 
-  it('超过 active_max 时自动归档旧消息', () => {
+  it('archives oldest messages when over active_max', () => {
     cleanTmpDir();
     const config = { inbox: { active_max: 5, archive_after_days: 365 } };
     const now = Math.floor(Date.now() / 1000);
@@ -101,7 +101,7 @@ describe('inbox/active.json 滚动队列', () => {
     expect(inbox.messages.length).toBeLessThanOrEqual(5);
   });
 
-  it('超过 archive_after_days 的消息被归档', () => {
+  it('archives messages older than archive_after_days', () => {
     cleanTmpDir();
     const now = Math.floor(Date.now() / 1000);
     const config = { inbox: { active_max: 200, archive_after_days: 7 } };
@@ -118,7 +118,7 @@ describe('inbox/active.json 滚动队列', () => {
     expect(ids).toContain('new-msg');
   });
 
-  it('updateMessage 更新消息字段', () => {
+  it('updateMessage updates message fields', () => {
     cleanTmpDir();
     const now = Math.floor(Date.now() / 1000);
     appendMessages([{ id: 'msg-x', from: 'alice', content: 'hi', timestamp: now }], {});
@@ -127,15 +127,15 @@ describe('inbox/active.json 滚动队列', () => {
     expect(inbox.messages[0].isRead).toBe(true);
   });
 
-  it('updateMessage 对不存在的 ID 返回 false', () => {
+  it('updateMessage returns false for unknown id', () => {
     expect(updateMessage('nonexistent', { isRead: true })).toBe(false);
   });
 });
 
-describe('archiveMessages 归档', () => {
+describe('archiveMessages', () => {
   beforeAll(cleanTmpDir);
 
-  it('将消息写入对应月份的 JSONL 文件', () => {
+  it('writes messages to the correct monthly JSONL file', () => {
     cleanTmpDir();
     fs.mkdirSync(path.join(tmpDir, 'inbox'), { recursive: true });
     const msgs = [{ id: 'msg-1', from: 'alice', content: 'hi', timestamp: 1700000000 }];
@@ -148,7 +148,7 @@ describe('archiveMessages 归档', () => {
     expect(JSON.parse(lines[0]).id).toBe('msg-1');
   });
 
-  it('同月消息追加到同一文件', () => {
+  it('appends same-month messages to the same file', () => {
     cleanTmpDir();
     fs.mkdirSync(path.join(tmpDir, 'inbox'), { recursive: true });
     archiveMessages([{ id: 'msg-1', timestamp: 1700000000 }]);
@@ -159,7 +159,7 @@ describe('archiveMessages 归档', () => {
     expect(lines).toHaveLength(2);
   });
 
-  it('不同月消息写入不同文件', () => {
+  it('writes different months to different files', () => {
     cleanTmpDir();
     fs.mkdirSync(path.join(tmpDir, 'inbox'), { recursive: true });
     archiveMessages([
@@ -172,14 +172,14 @@ describe('archiveMessages 归档', () => {
   });
 });
 
-describe('peers.json 缓存', () => {
+describe('peers.json cache', () => {
   beforeAll(cleanTmpDir);
 
-  it('readPeers 在文件不存在时返回空对象', () => {
+  it('readPeers returns {} when file is missing', () => {
     expect(readPeers()).toEqual({});
   });
 
-  it('updatePeersCache 写入并可读取', () => {
+  it('updatePeersCache persists and readPeers reads it', () => {
     updatePeersCache([
       { clawid: 'alice', pubkey: 'pubkey-alice', pubkey_version: 1, last_seen: 1700000000 },
     ]);
@@ -188,20 +188,20 @@ describe('peers.json 缓存', () => {
     expect(peers['alice'].cached_at).toBeGreaterThan(0);
   });
 
-  it('getPeerPubkey 返回未过期的公钥', () => {
+  it('getPeerPubkey returns pubkey when not expired', () => {
     updatePeersCache([{ clawid: 'bob', pubkey: 'pk-bob', pubkey_version: 1, last_seen: 1700000000 }]);
     expect(getPeerPubkey('bob', {})).toBe('pk-bob');
   });
 
-  it('getPeerPubkey 对不存在的 ClawID 返回 null', () => {
+  it('getPeerPubkey returns null for unknown ClawID', () => {
     expect(getPeerPubkey('nonexistent', {})).toBeNull();
   });
 });
 
-describe('audit.jsonl 追加', () => {
+describe('audit.jsonl append', () => {
   beforeAll(cleanTmpDir);
 
-  it('appendAudit 写入 JSONL 格式', () => {
+  it('appendAudit writes JSONL lines', () => {
     appendAudit({ op: 'pull', count: 3 });
     appendAudit({ op: 'send', to: 'bob' });
 
