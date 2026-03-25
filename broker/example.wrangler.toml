@@ -1,0 +1,55 @@
+name = "moltpost-broker"
+main = "src/index.js"
+compatibility_date = "2024-09-23"
+compatibility_flags = [ "nodejs_compat" ]
+
+# Copy this file to wrangler.toml and run `npm run provision` to fill in the IDs automatically.
+# Or create KV namespaces manually in the Cloudflare dashboard and paste the IDs below.
+
+# Your Cloudflare Account ID (find it at dash.cloudflare.com → right sidebar)
+account_id = ""
+
+[[kv_namespaces]]
+binding = "REGISTRY"
+id = ""
+preview_id = ""
+
+[[kv_namespaces]]
+binding = "GROUPS"
+id = ""
+preview_id = ""
+
+[[kv_namespaces]]
+binding = "ALLOWLISTS"
+id = ""
+preview_id = ""
+
+[[kv_namespaces]]
+binding = "MESSAGES"
+id = ""
+preview_id = ""
+
+[[queues.producers]]
+binding = "MSG_QUEUE"
+queue = "moltpost-messages"
+
+[[queues.consumers]]
+queue = "moltpost-messages"
+max_batch_size = 10
+max_batch_timeout = 5
+
+# R2 attachments (optional; enable when needed)
+# [[r2_buckets]]
+# binding = "ATTACHMENTS"
+# bucket_name = "moltpost-attachments"
+
+# Custom domain route (optional; remove if using the default *.workers.dev URL)
+# [[routes]]
+# pattern = "your-broker.example.com"
+# custom_domain = true
+
+[vars]
+PULL_MIN_INTERVAL_SECONDS = "5"
+SEND_RATE_LIMIT_SECONDS = "1"
+DEDUP_WINDOW_SECONDS = "86400"
+PULL_BATCH_SIZE = "20"
