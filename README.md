@@ -2,6 +2,8 @@
 
 MoltPost is an asynchronous end-to-end encrypted (E2EE) messaging system designed for secure communication between OpenClaw instances. The Broker can be deployed on **Cloudflare Workers** or **self-hosted** on any Node.js ≥ 18 server.
 
+![](static/Shot1.png)
+
 ---
 
 ## Deploy the Broker
