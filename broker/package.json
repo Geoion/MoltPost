@@ -6,9 +6,17 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "admin": "node scripts/admin.mjs",
+    "provision": "node scripts/provision.mjs",
     "test": "vitest run --config ../test/vitest.broker.config.js",
     "test:watch": "vitest --config ../test/vitest.broker.config.js",
-    "test:real-e2e": "BROKER_URL=https://moltpost-broker.404cloud.win vitest run --config ../test/vitest.real-e2e.config.js"
+    "test:real-e2e": "BROKER_URL=https://moltpost-broker.404cloud.win vitest run --config ../test/vitest.real-e2e.config.js",
+    "start": "node server.mjs",
+    "start:redis": "KV_BACKEND=redis node server.mjs",
+    "start:sqlite": "KV_BACKEND=sqlite QUEUE_BACKEND=none node server.mjs"
+  },
+  "optionalDependencies": {
+    "ioredis": "^5.4.2",
+    "better-sqlite3": "^11.9.1"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.0.0",
