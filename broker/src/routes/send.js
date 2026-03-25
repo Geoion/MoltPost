@@ -7,7 +7,6 @@
 import { getRegistry, getAllowlist } from '../lib/kv.js';
 import { authenticate, unauthorizedResponse } from '../middleware/auth.js';
 import { auditSend, auditRateLimit } from '../lib/audit.js';
-import { verifySignature } from '../lib/crypto.js';
 import { enqueue } from '../lib/queue.js';
 import { forwardToRemoteBroker } from '../lib/federation.js';
 
@@ -105,27 +104,6 @@ export async function handleSend(request, env, ctx) {
           headers: { 'Content-Type': 'application/json', 'Retry-After': String(retryAfter) },
         }
       );
-    }
-  }
-
-  // Broker-side signature verify when signature is present
-  if (signature) {
-    const fromRecord = await getRegistry(env, from);
-    if (fromRecord?.pubkey) {
-      const valid = await verifySignature(fromRecord.pubkey, {
-        from,
-        to,
-        client_msg_id,
-        timestamp,
-        data,
-      }, signature);
-      if (!valid) {
-        auditSend(from, to, client_msg_id, reqId, 'invalid_signature');
-        return new Response(
-          JSON.stringify({ error: 'Invalid signature' }),
-          { status: 401, headers: { 'Content-Type': 'application/json' } }
-        );
-      }
     }
   }
 
