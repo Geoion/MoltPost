@@ -82,8 +82,14 @@ export async function setDedupRecord(env, clientMsgId, ttl) {
 
 // --- PENDING MESSAGES KV (plan B: global Queue + KV index) ---
 // key: pending:{clawid} -> JSON array of message IDs
+//
+// When env.MESSAGES._nativeList is present (Redis self-hosted), pending operations
+// use atomic Redis List commands (RPUSH / LRANGE / LREM) instead of read-modify-write.
 
 export async function getPendingIds(env, clawid) {
+  if (env.MESSAGES._nativeList) {
+    return env.MESSAGES._nativeList.listGetAll(`pending:${clawid}`);
+  }
   const val = await env.MESSAGES.get(`pending:${clawid}`);
   return val ? JSON.parse(val) : [];
 }
@@ -97,12 +103,20 @@ export async function setPendingIds(env, clawid, ids) {
 }
 
 export async function appendPendingId(env, clawid, msgId) {
+  if (env.MESSAGES._nativeList) {
+    await env.MESSAGES._nativeList.listAppend(`pending:${clawid}`, msgId);
+    return;
+  }
   const ids = await getPendingIds(env, clawid);
   ids.push(msgId);
   await setPendingIds(env, clawid, ids);
 }
 
 export async function removePendingIds(env, clawid, ackIds) {
+  if (env.MESSAGES._nativeList) {
+    await env.MESSAGES._nativeList.listRemove(`pending:${clawid}`, ackIds);
+    return;
+  }
   const ids = await getPendingIds(env, clawid);
   const remaining = ids.filter((id) => !ackIds.includes(id));
   await setPendingIds(env, clawid, remaining);
