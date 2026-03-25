@@ -65,7 +65,19 @@ function loadBrokerKv() {
 
 const KV = loadBrokerKv();
 
-const ACCOUNT_ID = 'b9e5dfb41a164d00dc9bd4cffc728742';
+function loadAccountId() {
+  if (process.env.CLOUDFLARE_ACCOUNT_ID) return process.env.CLOUDFLARE_ACCOUNT_ID;
+  try {
+    const content = readFileSync(WRANGLER_TOML, 'utf8');
+    const m = content.match(/^account_id\s*=\s*"([^"]+)"/m);
+    if (m?.[1]) return m[1];
+  } catch { /* ignore */ }
+  throw new Error(
+    'Cloudflare Account ID not found. Set CLOUDFLARE_ACCOUNT_ID env var or add account_id = "..." to wrangler.toml.',
+  );
+}
+
+const ACCOUNT_ID = loadAccountId();
 
 // Cloudflare OAuth token endpoint
 const CF_TOKEN_URL = 'https://dash.cloudflare.com/oauth2/token';
