@@ -12,61 +12,61 @@ import {
   pubkeyFingerprint,
 } from '../../client/scripts/lib/crypto.mjs';
 
-describe('RSA-2048 密钥对生成', () => {
-  it('生成的密钥对包含 PEM 格式的公钥和私钥', () => {
+describe('RSA-2048 key pair generation', () => {
+  it('produces PEM public and private keys', () => {
     const { privateKey, publicKey } = generateKeyPair();
     expect(privateKey).toContain('-----BEGIN PRIVATE KEY-----');
     expect(publicKey).toContain('-----BEGIN PUBLIC KEY-----');
   });
 
-  it('每次生成的密钥对不同', () => {
+  it('generates a different key pair each time', () => {
     const kp1 = generateKeyPair();
     const kp2 = generateKeyPair();
     expect(kp1.publicKey).not.toBe(kp2.publicKey);
   });
 });
 
-describe('RSA-OAEP 加解密', () => {
+describe('RSA-OAEP encrypt/decrypt', () => {
   const { privateKey, publicKey } = generateKeyPair();
 
-  it('加密后可以解密还原明文', () => {
+  it('decrypts ciphertext back to plaintext', () => {
     const plaintext = 'Hello, MoltPost!';
     const ciphertext = encrypt(publicKey, plaintext);
     const decrypted = decrypt(privateKey, ciphertext);
     expect(decrypted).toBe(plaintext);
   });
 
-  it('加密结果为 hex 字符串', () => {
+  it('ciphertext is a hex string', () => {
     const ciphertext = encrypt(publicKey, 'test');
     expect(ciphertext).toMatch(/^[0-9a-f]+$/);
   });
 
-  it('相同明文每次加密结果不同（RSA-OAEP 随机填充）', () => {
+  it('same plaintext yields different ciphertext (RSA-OAEP random padding)', () => {
     const c1 = encrypt(publicKey, 'same message');
     const c2 = encrypt(publicKey, 'same message');
     expect(c1).not.toBe(c2);
   });
 
-  it('用错误私钥解密抛出异常', () => {
+  it('throws when decrypting with the wrong private key', () => {
     const { privateKey: wrongKey } = generateKeyPair();
     const ciphertext = encrypt(publicKey, 'secret');
     expect(() => decrypt(wrongKey, ciphertext)).toThrow();
   });
 
-  it('支持加密中文内容', () => {
-    const plaintext = '你好，这是一条测试消息！';
+  it('supports non-ASCII / Unicode plaintext', () => {
+    const plaintext = 'Hello, café — テスト 🎉';
     const ciphertext = encrypt(publicKey, plaintext);
     expect(decrypt(privateKey, ciphertext)).toBe(plaintext);
   });
 
-  it('支持加密较长内容（接近 RSA-2048 限制）', () => {
+  it('supports long plaintext near RSA-2048 limits', () => {
     const plaintext = 'A'.repeat(180);
     const ciphertext = encrypt(publicKey, plaintext);
     expect(decrypt(privateKey, ciphertext)).toBe(plaintext);
   });
 });
 
-describe('RSA-PSS 签名验签', () => {
+describe('RSA-PSS sign/verify', () => {
   const { privateKey, publicKey } = generateKeyPair();
 
   const payload = {
@@ -77,47 +77,47 @@ describe('RSA-PSS 签名验签', () => {
     data: 'encrypted-hex-blob',
   };
 
-  it('签名后可以验签通过', () => {
+  it('verify succeeds after sign', () => {
     const sig = sign(privateKey, payload);
     expect(verify(publicKey, payload, sig)).toBe(true);
   });
 
-  it('签名结果为 hex 字符串', () => {
+  it('signature is a hex string', () => {
     const sig = sign(privateKey, payload);
     expect(sig).toMatch(/^[0-9a-f]+$/);
   });
 
-  it('篡改 from 字段后验签失败', () => {
+  it('verify fails if from is tampered', () => {
     const sig = sign(privateKey, payload);
     const tampered = { ...payload, from: 'mallory' };
     expect(verify(publicKey, tampered, sig)).toBe(false);
   });
 
-  it('篡改 data 字段后验签失败', () => {
+  it('verify fails if data is tampered', () => {
     const sig = sign(privateKey, payload);
     const tampered = { ...payload, data: 'tampered-data' };
     expect(verify(publicKey, tampered, sig)).toBe(false);
   });
 
-  it('用错误公钥验签失败', () => {
+  it('verify fails with wrong public key', () => {
     const { publicKey: wrongPub } = generateKeyPair();
     const sig = sign(privateKey, payload);
     expect(verify(wrongPub, payload, sig)).toBe(false);
   });
 
-  it('无效签名字符串返回 false', () => {
+  it('invalid signature hex returns false', () => {
     expect(verify(publicKey, payload, 'deadbeef')).toBe(false);
   });
 });
 
-describe('ECDH X25519 + AES-GCM 前向保密', () => {
-  it('生成 X25519 密钥对', () => {
+describe('ECDH X25519 + AES-GCM forward secrecy', () => {
+  it('generates an X25519 key pair', () => {
     const { privateKey, publicKey } = generateECDHKeyPair();
     expect(privateKey).toContain('-----BEGIN PRIVATE KEY-----');
     expect(publicKey).toContain('-----BEGIN PUBLIC KEY-----');
   });
 
-  it('双方协商出相同的会话密钥', () => {
+  it('both parties derive the same session key', () => {
     const alice = generateECDHKeyPair();
     const bob = generateECDHKeyPair();
     const keyA = deriveSessionKey(alice.privateKey, bob.publicKey);
@@ -125,25 +125,25 @@ describe('ECDH X25519 + AES-GCM 前向保密', () => {
     expect(Buffer.from(keyA).toString('hex')).toBe(Buffer.from(keyB).toString('hex'));
   });
 
-  it('AES-GCM 加密后可以解密', () => {
+  it('AES-GCM decrypts after encrypt', () => {
     const alice = generateECDHKeyPair();
     const bob = generateECDHKeyPair();
     const sessionKey = deriveSessionKey(alice.privateKey, bob.publicKey);
 
-    const plaintext = '前向保密测试消息';
+    const plaintext = 'Forward secrecy test message';
     const ciphertext = encryptAESGCM(sessionKey, plaintext);
     const decrypted = decryptAESGCM(sessionKey, ciphertext);
     expect(decrypted).toBe(plaintext);
   });
 
-  it('AES-GCM 密文格式为 hex', () => {
+  it('AES-GCM ciphertext is hex', () => {
     const { privateKey, publicKey } = generateECDHKeyPair();
     const sessionKey = deriveSessionKey(privateKey, publicKey);
     const ciphertext = encryptAESGCM(sessionKey, 'test');
     expect(ciphertext).toMatch(/^[0-9a-f]+$/);
   });
 
-  it('相同明文每次加密结果不同（随机 IV）', () => {
+  it('same plaintext yields different ciphertext (random IV)', () => {
     const { privateKey, publicKey } = generateECDHKeyPair();
     const sessionKey = deriveSessionKey(privateKey, publicKey);
     const c1 = encryptAESGCM(sessionKey, 'same');
@@ -151,7 +151,7 @@ describe('ECDH X25519 + AES-GCM 前向保密', () => {
     expect(c1).not.toBe(c2);
   });
 
-  it('错误会话密钥解密抛出异常', () => {
+  it('throws when decrypting with wrong session key', () => {
     const alice = generateECDHKeyPair();
     const bob = generateECDHKeyPair();
     const carol = generateECDHKeyPair();
@@ -164,19 +164,19 @@ describe('ECDH X25519 + AES-GCM 前向保密', () => {
   });
 });
 
-describe('公钥指纹', () => {
-  it('同一公钥指纹一致', () => {
+describe('Public key fingerprint', () => {
+  it('is stable for the same public key', () => {
     const { publicKey } = generateKeyPair();
     expect(pubkeyFingerprint(publicKey)).toBe(pubkeyFingerprint(publicKey));
   });
 
-  it('不同公钥指纹不同', () => {
+  it('differs across different public keys', () => {
     const { publicKey: pub1 } = generateKeyPair();
     const { publicKey: pub2 } = generateKeyPair();
     expect(pubkeyFingerprint(pub1)).not.toBe(pubkeyFingerprint(pub2));
   });
 
-  it('指纹为 64 位 hex（SHA-256）', () => {
+  it('is 64 hex chars (SHA-256)', () => {
     const { publicKey } = generateKeyPair();
     expect(pubkeyFingerprint(publicKey)).toMatch(/^[0-9a-f]{64}$/);
   });
