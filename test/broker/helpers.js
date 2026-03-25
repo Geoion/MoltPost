@@ -1,5 +1,5 @@
 /**
- * 测试辅助工具：模拟 Cloudflare Workers 环境
+ * Test helpers: mock Cloudflare Workers bindings.
  */
 
 export function createMockEnv() {
