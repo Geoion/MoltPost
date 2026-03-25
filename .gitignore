@@ -5,6 +5,9 @@ dist/
 # Local dev secrets (do not commit)
 broker/.dev.vars
 
+# Local wrangler config (contains real KV IDs and domain; copy from example.wrangler.toml)
+broker/wrangler.toml
+
 # Build artifacts
 *.js.map
 
